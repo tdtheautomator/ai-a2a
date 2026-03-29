@@ -73,15 +73,13 @@ Orchestrator Agent  (port 8000)
     ▼  route=kb               ▼  route=db
 KB Agent (8001)          DB Agent (8002)
     │                         │
-    │  A2A tasks/send          │  A2A tasks/send (×2)
+    │  A2A tasks/send         │  A2A tasks/send (×2)
     └──────────┬──────────────┘
                ▼
         LLM Gateway Agent (8003)
         [AsyncOpenAI → LiteLLM → Ollama]
                │
-    ┌──────────┴──────────┐
-    ▼                     ▼
-Qdrant (6333)        PostgreSQL (5432)
+    
 ```
 
 ### Agent Responsibilities
