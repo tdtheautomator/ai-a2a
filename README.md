@@ -457,7 +457,7 @@ To improve performance:
 ---
 
 ## 8. Demo Video
-
+![](assets/demo_a2a.gif)
 ![Demo Video](assets/demo_a2a.mp4)
 
 *A2A Multi-Agent System — Built with [Google A2A Protocol](https://google.github.io/A2A/)*
