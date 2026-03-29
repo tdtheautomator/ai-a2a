@@ -1,0 +1,415 @@
+name: demo-infra
+services:
+#01 ============ Redis (Cache) ====================
+  redis:
+    image: redis:7-alpine
+    container_name: demo-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - demo-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+#02 ============ Redis Exporter (Metrics) =========
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: demo-redis-exporter
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    ports:
+      - "9121:9121"
+    networks:
+      - demo-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
+
+#03 ============ Ollama (Inference) ===============
+  ollama:
+    image: ollama/ollama:latest
+    container_name: demo-ollama
+    ports:
+      - "8085:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    volumes:
+      - ${OLLAMA_MODELS}:/root/.ollama/models
+    networks:
+      - demo-net
+    deploy: 
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
+
+#03 ============ Qdrant Vector Database ===========
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: demo-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      QDRANT_API_KEY: admin
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - demo-net
+
+#04 ============ MinIO Object Storage =============
+  minio:
+   image: minio/minio:latest
+   container_name: demo-minio
+   ports:
+      - "19000:19000"
+      - "19001:19001"
+   environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+   volumes:
+      - minio_data:/data
+   networks:
+      - demo-net
+   command: server /data --address ":19000" --console-address ":19001"
+   logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
+
+#05 ============ PostgresSQL Database =============
+  postgres:
+    image: postgres:15-alpine
+    container_name: demo-postgres
+    environment:
+     - POSTGRES_USER=postgres
+     - POSTGRES_PASSWORD=postgres
+     - POSTGRES_DB=DEMODB
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./config/postgres/02-agent-metrics-views.sql:/docker-entrypoint-initdb.d/02-agent-metrics-views.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - demo-net
+
+#06 ============ PGAdmin (DB Management) ==========
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: demo-pgadmin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=xyz@xyz.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      # - SCRIPT_NAME=/pgadmin
+    networks:
+      - demo-net
+    depends_on:
+      - postgres
+
+#07 ============ LiteLLM (AI Gateway) =============
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable 
+    container_name: demo-litellm
+    ports:
+      - "4000:4000"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - LITELLM_CACHE_TTL=3600
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LITELLM_LOG=DEBUG
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./config/litellm/config.yml:/app/config.yml
+    command:
+      [ "--config", "/app/config.yml", "--port", "4000" ]
+    depends_on:
+     redis:
+       condition: service_healthy
+     ollama:
+        condition: service_started
+    networks:
+      - demo-net
+    logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
+
+#08 ============ Solace (PubSub Broker) ===========
+  solace-broker:
+    image: solace/solace-pubsub-standard:latest
+    container_name: demo-solace-broker
+    ports:
+      - "8080:8080"     # Solace management UI and SEMP API
+      # - "55555:55555"   # Solace messaging port (SMF)
+      - "8008:8008"     # WebSocket for message‑VPNs
+      # - "8443:8443"     # HTTPS for message‑VPNs
+      - "1883:1883"     # MQTT
+      # - "8883:8883"     # MQTT over TLS
+      - "5672:5672"     # AMQP
+      # - "5671:5671"     # AMQP over TLS
+      - "9000:9000"     # REST API      
+      - "9443:9443"     # SMF compressed
+
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=admin
+      - system_scaling_maxconnectioncount=1000
+      - SOLACE_HOME=/opt/solace
+      - INTRINSIC_STATS=yes
+    volumes:
+      - solace_data:/var/lib/solace
+    networks:
+      - demo-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    shm_size: '2gb'
+    #Health check to ensure broker is ready before initialization
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+#09 ============ Prometheus (Monitoring) ==========
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: demo-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    depends_on:
+      redis:
+        condition: service_healthy
+      litellm:
+       condition: service_started
+      redis-exporter:
+       condition: service_started
+      postgres-exporter:
+        condition: service_started
+      solace-exporter:
+        condition: service_started
+    networks:
+      - demo-net
+    logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
+
+#10 ============ Grafana (Monitoring Dashboards) ==
+  grafana:
+    image: grafana/grafana:latest
+    container_name: demo-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./config/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ./config/grafana/dashboard.json:/var/lib/grafana/dashboards/llm-dashboard.json
+      - ./config/grafana/eagent.json:/var/lib/grafana/dashboards/eagent.json
+    depends_on:
+      - prometheus
+    networks:
+      - demo-net
+    logging:
+        driver: "json-file"
+        options:
+          max-size: "10m"
+          max-file: "3"
+
+
+#12 ============ Postgres Exporter (Metrics) ======
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: demo-postgres-exporter
+    environment:
+      - DATA_SOURCE_NAME=postgresql://postgres:postgres@postgres:5432/DEMODB?sslmode=disable
+    ports:
+      - "9187:9187"
+    networks:
+      - demo-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+#13 ============ Solace Exporter (Metrics) ========
+  solace-exporter:
+    image: solacecommunity/solace-prometheus-exporter:latest
+    container_name: demo-solace-exporter
+    ports:
+      - "9628:9628"
+    environment:
+      - SOLACE_SCRAPE_URI=http://solace-broker:8080
+      - SOLACE_USER=admin
+      - SOLACE_PASSWORD=admin
+      - SOLACE_TIMEOUT=5s
+      - SOLACE_TLS_VERIFY_DISABLE=false
+    networks:
+      - demo-net
+    depends_on:
+      solace-broker:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        
+#14 ============ Solace Broker Init ===============
+  solace-init:
+    image: python:3.11-slim
+    container_name: demo-solace-init
+    depends_on:
+      solace-broker:
+        condition: service_healthy
+    environment:
+      - SOLACE_MGMT=http://solace-broker:8080
+      - SOLACE_USER=admin
+      - SOLACE_PASS=admin
+    volumes:
+      - ./config/solace-init/init.py:/solace-init/init.py:ro
+      - ./config/solace-init/init-config.json:/solace-init/init-config.json:ro
+    working_dir: /solace-init
+    # Install requests library and run the initialization script
+    entrypoint: 
+      - /bin/bash
+      - -c
+      - |
+        pip install --quiet requests && 
+        python init.py init-config.json \
+          --host solace-broker:8080 \
+          --username admin \
+          --password admin
+    networks:
+      - demo-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        
+#15 ============ Embedding Agent (LiteLLM) ========
+  embed-agent:
+    build:
+      context: .
+      dockerfile: ./config/agents/embedding_agent/Dockerfile
+    container_name: demo-embed-agent
+    depends_on:
+      solace-broker:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_started
+      litellm:
+        condition: service_started
+      prometheus:
+        condition: service_started
+      grafana:
+        condition: service_started
+    environment:
+      - SOLACE_HOST=tcp://solace-broker:55555
+      - SOLACE_VPN=default
+      - SOLACE_USER=admin
+      - SOLACE_PASSWORD=admin
+      - MINIO_HOST=minio:19000
+      - MINIO_USER=minioadmin
+      - MINIO_PASSWORD=minioadmin
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION=documents
+      - QDRANT_VECTOR_SIZE=1024
+      - LITELLM_URL=http://litellm:4000
+      - LITELLM_KEY=sk-1234
+      - EMBEDDING_MODEL=qwen3-embedding:0.6b
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=DEMODB
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - CHUNKING_STRATEGY=recursive
+      - CHUNK_SIZE=200
+      - CHUNK_OVERLAP=100
+      - POLL_INTERVAL=10
+      - BATCH_SIZE=1
+    networks:
+      - demo-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: on-failure:3
+
+#xx ============ Data Volumes =====================
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  solace_data:
+  minio_data:
+  qdrant_storage:
+  postgres_data:
+  pgadmin_data:
+
+#xx ============ Networks =========================
+networks:
+  demo-net:
+    name: demo-net
+    driver: bridge

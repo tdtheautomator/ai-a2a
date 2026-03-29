@@ -1,0 +1,184 @@
+name: demo-agents
+
+x-agent-env: &agent-env
+  LITELLM_HOST:            demo-litellm
+  LITELLM_PORT:            "4000"
+  LITELLM_API_KEY:         sk-1234
+  LITELLM_CHAT_MODEL:      qwen3:0.6b
+  LITELLM_EMBEDDING_MODEL: qwen3-embedding:0.6b
+  QDRANT_HOST:             demo-qdrant
+  QDRANT_PORT:             "6333"
+  QDRANT_COLLECTION:       documents
+  DB_HOST:                 demo-postgres
+  DB_PORT:                 "5432"
+  DB_NAME:                 DEMODB
+  DB_USER:                 postgres
+  DB_PASSWORD:             postgres
+
+  # ── Timeout ladder (all in seconds) ───────────────────────────────────────
+  # CPU-only Ollama benchmark: ~50 s per 3 tokens.
+  # A 256-token routing reply  ≈  60–120 s
+  # A 512-token SQL/summarise  ≈ 120–250 s
+  # db_agent total (2× LLM)    ≈ 240–500 s
+  #
+  # Rule: each layer's timeout must be GREATER than the layer below it,
+  # otherwise the outer client cuts the connection before the inner call
+  # can return a proper error response.
+  #
+  #   llm_agent  LLM_READ_TIMEOUT_SECS    = 300 s  (single Ollama call)
+  #   kb/db      AGENT_READ_TIMEOUT_SECS  = 600 s  (llm_agent + data ops)
+  #   orchestrator ROUTE_TIMEOUT_SECS     = 180 s  (routing call only)
+  #   orchestrator AGENT_READ_TIMEOUT_SECS= 600 s  (full kb/db call)
+  #   test client  TEST_TIMEOUT_SECS      = 700 s  (end-to-end)
+  #
+  # Lower all values once you add a GPU or switch to a remote LLM.
+  LLM_READ_TIMEOUT_SECS:      "300"
+  AGENT_READ_TIMEOUT_SECS:    "600"
+  AGENT_CONNECT_TIMEOUT_SECS: "10"
+
+  # Reasoning model token budgets
+  # route_question needs ≥256 tokens so the think-block fits before the answer.
+  ROUTE_MIN_TOKENS: "256"
+
+services:
+
+#01 ============ LLM Gateway Agent ============
+  llm_agent:
+    container_name: demo-llm-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn agents.llm_agent:app --host 0.0.0.0 --port 8003
+    ports:
+      - "8003:8003"
+    environment:
+      <<: *agent-env
+      LLM_AGENT_PORT: "8003"
+      LLM_AGENT_URL:  "http://llm_agent:8003"
+    networks:
+      - demo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/.well-known/agent.json"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+#02 ============ KB Reader Agent ============
+  kb_agent:
+    container_name: demo-kb-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn agents.kb_agent:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *agent-env
+      KB_AGENT_PORT: "8001"
+      KB_AGENT_URL:  "http://kb_agent:8001"
+      LLM_AGENT_URL: "http://llm_agent:8003"
+    depends_on:
+      llm_agent:
+        condition: service_healthy
+    networks:
+      - demo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/.well-known/agent.json"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+#03 ============ DB Reader Agent ============
+  db_agent:
+    container_name: demo-db-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn agents.db_agent:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    environment:
+      <<: *agent-env
+      DB_AGENT_PORT: "8002"
+      DB_AGENT_URL:  "http://db_agent:8002"
+      LLM_AGENT_URL: "http://llm_agent:8003"
+    depends_on:
+      llm_agent:
+        condition: service_healthy
+    networks:
+      - demo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/.well-known/agent.json"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+#04 ============ Orchestrator ============
+  orchestrator:
+    container_name: demo-orchestrator
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn agents.orchestrator:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *agent-env
+      ORCHESTRATOR_PORT:    "8000"
+      ORCHESTRATOR_URL:     "http://orchestrator:8000"
+      KB_AGENT_URL:         "http://kb_agent:8001"
+      DB_AGENT_URL:         "http://db_agent:8002"
+      LLM_AGENT_URL:        "http://llm_agent:8003"
+      ROUTE_TIMEOUT_SECS:   "180"
+    depends_on:
+      llm_agent:
+        condition: service_healthy
+      kb_agent:
+        condition: service_healthy
+      db_agent:
+        condition: service_healthy
+    networks:
+      - demo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/.well-known/agent.json"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+#05 ============ Demo UI ============
+  ui:
+    container_name: demo-ui
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn ui_server:app --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *agent-env
+      UI_PORT:          "8080"
+      ORCHESTRATOR_URL: "http://orchestrator:8000"
+      KB_AGENT_URL:     "http://kb_agent:8001"
+      DB_AGENT_URL:     "http://db_agent:8002"
+      LLM_AGENT_URL:    "http://llm_agent:8003"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - demo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+#xx ============ Networks =========================
+networks:
+  demo-net:
+    external: true
+    name: demo-net

@@ -1,0 +1,3 @@
+What is HAL ?
+What makes human conversastions Human ?
+What is Human-likeness classifier ?

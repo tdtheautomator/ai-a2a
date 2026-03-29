@@ -1,0 +1,23 @@
+apiVersion: 1
+
+datasources:
+  - name: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    version: 1
+
+  - name: postgres-metrics
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: postgres
+    jsonData:
+      database: DEMODB
+      sslmode: disable
+      postgresVersion: 15
+      timescaledb: false
+    secureJsonData:
+      password: postgres

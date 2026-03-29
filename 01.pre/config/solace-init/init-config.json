@@ -1,0 +1,116 @@
+{
+  "msgVpn": [
+    {
+      "msgVpnName": "default",
+      "enabled": true,
+      "authenticationBasicEnabled": true,
+      "maxMsgSpoolUsage": 5000
+    }
+  ],
+  "queues": [
+    {
+      "queueName": "uploads",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "file/uploaded",
+      "permission": "consume"
+    },
+    {
+      "queueName": "embed-response",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "embed-agent/response",
+      "permission": "consume"
+    },
+    {
+      "queueName": "orchestrator-request",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "agent/query",
+      "permission": "consume",
+      "description": "Incoming queries for the orchestrator agent"
+    },
+    {
+      "queueName": "orchestrator-response",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "orchestrator/response",
+      "permission": "consume",
+      "description": "Responses from orchestrator agent"
+    },
+    {
+      "queueName": "kb-responder-request",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "kb-responder/request",
+      "permission": "consume",
+      "description": "Requests for KB Responder agent (RAG queries)"
+    },
+    {
+      "queueName": "kb-responder-response",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "kb-responder/response",
+      "permission": "consume",
+      "description": "Responses from KB Responder agent"
+    },
+    {
+      "queueName": "db-reader-request",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "db-reader/request",
+      "permission": "consume",
+      "description": "Requests for DB Reader agent (SQL inference)"
+    },
+    {
+      "queueName": "db-reader-response",
+      "owner": "default",
+      "accessType": "non-exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "db-reader/response",
+      "permission": "consume",
+      "description": "Responses from DB Reader agent"
+    },
+    {
+      "queueName": "agent-dlq",
+      "owner": "default",
+      "accessType": "exclusive",
+      "egressEnabled": true,
+      "ingressEnabled": true,
+      "subscription": "agent/error",
+      "permission": "consume",
+      "description": "Dead Letter Queue for failed agent messages"
+    }
+  ],
+  "topicEndpoints": [],
+  "comments": {
+    "architecture": "Multi-agent architecture with intelligent routing",
+    "flow": [
+      "1. Queries arrive at orchestrator-request queue (topic: agent/query)",
+      "2. Orchestrator analyzes query and routes to appropriate agent",
+      "3. KB Responder or DB Reader processes the query",
+      "4. Agents publish responses to their response queues",
+      "5. Orchestrator or client collects responses"
+    ],
+    "agents": {
+      "orchestrator": "Main routing agent that analyzes queries",
+      "kb-responder": "RAG-based agent using Qdrant for knowledge base queries",
+      "db-reader": "SQL inference agent for database queries"
+    }
+  }
+}
